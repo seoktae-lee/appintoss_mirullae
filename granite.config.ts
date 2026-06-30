@@ -4,7 +4,7 @@ export default defineConfig({
   appName: 'mirullae',
   brand: {
     displayName: '미룰래',
-    primaryColor: '#3182F6',
+    primaryColor: '#9FC530',
     icon: '/assets/brand/logo.png',
   },
   web: {

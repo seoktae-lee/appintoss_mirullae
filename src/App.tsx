@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ClipboardCheck,
   Flame,
+  Pencil,
   Plus,
   Settings,
   Share2,
@@ -13,29 +14,14 @@ import {
   X,
 } from 'lucide-react';
 import { shareMirullae } from './tossBridge';
-
-type Unit = '페이지' | '강의' | '문제' | '회' | '개';
-type DayStatus = 'done' | 'partial' | 'skipped';
-
-type Chapter = {
-  id: string;
-  title: string;
-  amount: number;
-};
-
-type Goal = {
-  id: string;
-  title: string;
-  deadline: string;
-  total: number;
-  unit: Unit;
-  chapters?: Chapter[];
-  completed: number;
-  postponedTotal: number;
-  postponeCount: number;
-  createdAt: string;
-  logs: Record<string, { status: DayStatus; amount: number }>;
-};
+import { clearAuth } from './api/client';
+import { playInterstitialAd } from './hooks/useFullScreenAd';
+import { AD_IDS } from './data/adConfig';
+import { LoginPage } from './pages/LoginPage';
+import { NicknamePage } from './pages/NicknamePage';
+import { SettingsPage } from './pages/SettingsPage';
+import { useGoals } from './hooks/useGoals';
+import type { Chapter, DayStatus, Goal, LoginResponse, Unit, User } from './api/types';
 
 type FactResult = {
   goalId: string;
@@ -49,24 +35,8 @@ type FactResult = {
 };
 
 const units: Unit[] = ['페이지', '강의', '문제', '회', '개'];
-const storageKey = 'mirullae:v1';
 const today = () => new Date().toISOString().slice(0, 10);
 const asset = (path: string) => `/assets/${path}`;
-
-const starterGoals: Goal[] = [
-  {
-    id: crypto.randomUUID(),
-    title: 'SQLD 자격증',
-    deadline: addDays(17),
-    total: 40,
-    unit: '강의',
-    completed: 23,
-    postponedTotal: 0,
-    postponeCount: 0,
-    createdAt: today(),
-    logs: {},
-  },
-];
 
 function addDays(days: number) {
   const date = new Date();
@@ -145,17 +115,6 @@ function factLine(count: number, amount: number, unit: Unit) {
   return `...나도 모르겠다. 내일부터 ${formatAmount(amount)}${unit}.`;
 }
 
-function loadGoals() {
-  const raw = localStorage.getItem(storageKey);
-  if (!raw) return starterGoals;
-
-  try {
-    return JSON.parse(raw) as Goal[];
-  } catch {
-    return starterGoals;
-  }
-}
-
 function weekDays() {
   const now = new Date();
   const day = now.getDay() || 7;
@@ -169,99 +128,139 @@ function weekDays() {
   });
 }
 
+function monthDays() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  const firstWeekday = (new Date(year, month, 1).getDay() || 7) - 1;
+
+  const cells: (string | null)[] = Array(firstWeekday).fill(null);
+  for (let d = 1; d <= lastDate; d += 1) {
+    cells.push(new Date(year, month, d).toISOString().slice(0, 10));
+  }
+  return cells;
+}
+
 function App() {
-  const [goals, setGoals] = useState<Goal[]>(loadGoals);
+  const [user, setUser] = useState<User | null>(() => {
+    const stored = localStorage.getItem('mirullae_user');
+    return stored ? (JSON.parse(stored) as User) : null;
+  });
+
+  function handleLoginSuccess(loggedInUser: LoginResponse['user']) {
+    localStorage.setItem('mirullae_user', JSON.stringify(loggedInUser));
+    setUser(loggedInUser);
+  }
+
+  function handleWithdraw() {
+    clearAuth();
+    localStorage.removeItem('mirullae_user');
+    setUser(null);
+  }
+
+  if (!user) {
+    return <LoginPage onLogin={handleLoginSuccess} />;
+  }
+
+  if (!user.nickname) {
+    return (
+      <NicknamePage
+        onDone={(nickname) => {
+          const updated = { ...user, nickname };
+          localStorage.setItem('mirullae_user', JSON.stringify(updated));
+          setUser(updated);
+        }}
+      />
+    );
+  }
+
+  return (
+    <MainApp
+      user={user}
+      onUserUpdate={(updated) => {
+        localStorage.setItem('mirullae_user', JSON.stringify(updated));
+        setUser(updated);
+      }}
+      onWithdraw={handleWithdraw}
+    />
+  );
+}
+
+function MainApp({
+  user,
+  onUserUpdate,
+  onWithdraw,
+}: {
+  user: User;
+  onUserUpdate: (user: User) => void;
+  onWithdraw: () => void;
+}) {
+  const { goals, createGoal, patchGoal, removeGoal } = useGoals();
   const [activeIndex, setActiveIndex] = useState(0);
   const [isAddOpen, setAddOpen] = useState(false);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [partialGoal, setPartialGoal] = useState<Goal | null>(null);
   const [partialAmount, setPartialAmount] = useState(0);
   const [fact, setFact] = useState<FactResult | null>(null);
   const [doneGoal, setDoneGoal] = useState<Goal | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showMonth, setShowMonth] = useState(false);
+  const [dismissedEndedIds, setDismissedEndedIds] = useState<string[]>([]);
   const [toast, setToast] = useState('');
 
   const activeGoals = useMemo(() => goals.filter((goal) => dayDiff(goal.deadline) >= 0), [goals]);
+  const endedGoal = useMemo(
+    () => goals.find((goal) => dayDiff(goal.deadline) < 0 && !dismissedEndedIds.includes(goal.id)),
+    [goals, dismissedEndedIds],
+  );
   const totalPostpones = activeGoals.reduce((sum, goal) => sum + goal.postponeCount, 0);
   const health = Math.max(0, 100 - totalPostpones * 12);
   const activeGoal = activeGoals[Math.min(activeIndex, Math.max(activeGoals.length - 1, 0))];
 
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(goals));
-  }, [goals]);
-
-  useEffect(() => {
     if (activeIndex > activeGoals.length - 1) setActiveIndex(Math.max(activeGoals.length - 1, 0));
   }, [activeGoals.length, activeIndex]);
 
-  function updateGoal(goalId: string, updater: (goal: Goal) => Goal) {
-    setGoals((items) => items.map((goal) => (goal.id === goalId ? updater(goal) : goal)));
-  }
-
-  function createGoal(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleCreate(payload: { title: string; deadline: string; total: number; unit: Unit; chapters?: Chapter[] }) {
     if (goals.length >= 3) {
       setToast('목표는 3개까지만 가능해!');
       return;
     }
-
-    const form = new FormData(event.currentTarget);
-    const title = String(form.get('title') ?? '').trim();
-    const deadline = String(form.get('deadline') ?? '');
-    const total = Number(form.get('total'));
-    const unit = String(form.get('unit')) as Unit;
-    const chapterTitles = form.getAll('chapterTitle').map((value) => String(value).trim());
-    const chapterAmounts = form.getAll('chapterAmount').map((value) => Number(value));
-    const chapters = chapterTitles
-      .map((title, index) => ({ id: crypto.randomUUID(), title, amount: chapterAmounts[index] }))
-      .filter((chapter) => chapter.title && chapter.amount > 0);
-    const detailMode = form.get('detailMode') === 'on';
-    const resolvedTotal = detailMode ? chapters.reduce((sum, chapter) => sum + chapter.amount, 0) : total;
-
-    if (!title || !deadline || !resolvedTotal || dayDiff(deadline) <= 0) {
-      setToast('미션명, 내일 이후 마감일, 총 분량을 확인해줘.');
-      return;
+    try {
+      const goal = await createGoal(payload);
+      setActiveIndex(activeGoals.length);
+      setAddOpen(false);
+      void goal;
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : '목표 추가에 실패했어.');
     }
-
-    if (detailMode && chapters.length === 0) {
-      setToast('상세 목표는 단원을 1개 이상 넣어줘.');
-      return;
-    }
-
-    const goal: Goal = {
-      id: crypto.randomUUID(),
-      title,
-      deadline,
-      total: resolvedTotal,
-      unit,
-      chapters: detailMode ? chapters : undefined,
-      completed: 0,
-      postponedTotal: 0,
-      postponeCount: 0,
-      createdAt: today(),
-      logs: {},
-    };
-
-    setGoals((items) => [...items, goal]);
-    setActiveIndex(goals.length);
-    setAddOpen(false);
-    event.currentTarget.reset();
   }
 
-  function markDone(goal: Goal) {
+  async function handleEdit(goalId: string, payload: { title: string; deadline: string; total: number; unit: Unit; chapters?: Chapter[] }) {
+    try {
+      await patchGoal(goalId, payload);
+      setEditGoal(null);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : '목표 수정에 실패했어.');
+    }
+  }
+
+  async function markDone(goal: Goal) {
     if (todayLog(goal)) {
       setToast('이 목표는 오늘 이미 선택했어. 내일 다시 와!');
       return;
     }
 
     const amount = quota(goal);
-    updateGoal(goal.id, (item) => ({
-      ...item,
-      completed: Math.min(item.total, item.completed + amount),
-      logs: { ...item.logs, [today()]: { status: 'done', amount } },
-    }));
+    await patchGoal(goal.id, {
+      completed: Math.min(goal.total, goal.completed + amount),
+      logs: { ...goal.logs, [today()]: { status: 'done', amount } },
+    });
     setDoneGoal(goal);
   }
 
-  function postpone(goal: Goal, doneAmount = 0) {
+  async function postpone(goal: Goal, doneAmount = 0) {
     if (todayLog(goal)) {
       setToast('이 목표는 오늘 이미 선택했어. 내일 다시 와!');
       setPartialGoal(null);
@@ -276,13 +275,12 @@ function App() {
     const nextQuota = Number((nextRemaining / nextDays).toFixed(1));
     const status: DayStatus = doneAmount > 0 ? 'partial' : 'skipped';
 
-    updateGoal(goal.id, (item) => ({
-      ...item,
+    await patchGoal(goal.id, {
       completed: nextCompleted,
-      postponedTotal: item.postponedTotal + skipped,
-      postponeCount: item.postponeCount + 1,
-      logs: { ...item.logs, [today()]: { status, amount: doneAmount } },
-    }));
+      postponedTotal: goal.postponedTotal + skipped,
+      postponeCount: goal.postponeCount + 1,
+      logs: { ...goal.logs, [today()]: { status, amount: doneAmount } },
+    });
 
     setPartialGoal(null);
     setFact({
@@ -297,9 +295,13 @@ function App() {
     });
   }
 
-  function removeGoal(goalId: string) {
+  async function handleRemove(goalId: string) {
     if (!window.confirm('이 목표를 삭제할까?')) return;
-    setGoals((items) => items.filter((goal) => goal.id !== goalId));
+    try {
+      await removeGoal(goalId);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : '삭제에 실패했어.');
+    }
   }
 
   async function shareFact() {
@@ -313,6 +315,21 @@ function App() {
     setToast('공유 준비 완료!');
   }
 
+  async function handleFactBack() {
+    const closingFact = fact;
+    setFact(null);
+    if (closingFact) await playInterstitialAd(AD_IDS.INTERSTITIAL_FACT);
+  }
+
+  async function dismissEndedGoal(goal: Goal) {
+    setDismissedEndedIds((ids) => [...ids, goal.id]);
+    try {
+      await removeGoal(goal.id);
+    } catch {
+      // 삭제 실패해도 이번 세션에선 다시 띄우지 않음
+    }
+  }
+
   const ringStyle = {
     background: `conic-gradient(${health > 70 ? '#22c55e' : health > 40 ? '#f59e0b' : '#ef4444'} ${health}%, #e5e8ef 0)`,
   };
@@ -320,6 +337,9 @@ function App() {
   return (
     <main className="app-shell">
       <section className={`app ${fact ? 'app-alert' : ''}`}>
+        <div className={`scene-bg happy ${totalPostpones === 0 ? 'visible' : ''}`} />
+        <div className={`scene-bg worst ${totalPostpones > 0 ? 'visible' : ''}`} />
+        <div className="app-content">
         <header className="topbar">
           <img className="brand-mark" src={asset('brand/logo.png')} alt="" />
           <div>
@@ -327,7 +347,7 @@ function App() {
             <h1>미룰래</h1>
           </div>
           <div className="top-actions">
-            <button className="icon-button" aria-label="설정">
+            <button className="icon-button" aria-label="설정" onClick={() => setShowSettings(true)}>
               <Settings size={19} />
             </button>
             <button className="icon-button primary" aria-label="목표 추가" onClick={() => setAddOpen(true)}>
@@ -386,17 +406,26 @@ function App() {
                   setPartialAmount(Math.min(quota(activeGoal), 1));
                 }}
                 onPostpone={() => postpone(activeGoal)}
-                onRemove={() => removeGoal(activeGoal.id)}
+                onEdit={() => setEditGoal(activeGoal)}
+                onRemove={() => handleRemove(activeGoal.id)}
                 hasPrev={activeIndex > 0}
                 hasNext={activeIndex < activeGoals.length - 1}
               />
             )}
 
-            <WeekCalendar goals={activeGoals} />
+            <WeekCalendar goals={activeGoals} onOpenMonth={() => setShowMonth(true)} />
           </>
         )}
+        </div>
 
-        {isAddOpen && <AddSheet onClose={() => setAddOpen(false)} onSubmit={createGoal} />}
+        {isAddOpen && <GoalSheet onClose={() => setAddOpen(false)} onSubmit={handleCreate} />}
+        {editGoal && (
+          <GoalSheet
+            initialGoal={editGoal}
+            onClose={() => setEditGoal(null)}
+            onSubmit={(payload) => handleEdit(editGoal.id, payload)}
+          />
+        )}
         {partialGoal && (
           <PartialSheet
             goal={partialGoal}
@@ -406,8 +435,18 @@ function App() {
             onSubmit={() => postpone(partialGoal, partialAmount)}
           />
         )}
-        {fact && <FactScreen fact={fact} onBack={() => setFact(null)} onShare={shareFact} />}
+        {fact && <FactScreen fact={fact} onBack={handleFactBack} onShare={shareFact} />}
         {doneGoal && <DoneScreen goal={doneGoal} onClose={() => setDoneGoal(null)} />}
+        {endedGoal && <ResultScreen goal={endedGoal} onClose={() => dismissEndedGoal(endedGoal)} />}
+        {showMonth && <MonthCalendar goals={goals} onClose={() => setShowMonth(false)} />}
+        {showSettings && (
+          <SettingsPage
+            user={user}
+            onClose={() => setShowSettings(false)}
+            onUserUpdate={onUserUpdate}
+            onWithdraw={onWithdraw}
+          />
+        )}
         {toast && <Toast message={toast} onDone={() => setToast('')} />}
       </section>
     </main>
@@ -437,6 +476,7 @@ function GoalCard({
   onDone,
   onPartial,
   onPostpone,
+  onEdit,
   onRemove,
 }: {
   goal: Goal;
@@ -447,6 +487,7 @@ function GoalCard({
   onDone: () => void;
   onPartial: () => void;
   onPostpone: () => void;
+  onEdit: () => void;
   onRemove: () => void;
 }) {
   const progress = Math.min(100, Math.round((goal.completed / goal.total) * 100));
@@ -468,9 +509,14 @@ function GoalCard({
           <p className="section-label">D-{Math.max(dayDiff(goal.deadline), 0)}</p>
           <h3>{goal.title}</h3>
         </div>
-        <button className="icon-button danger" aria-label="목표 삭제" onClick={onRemove}>
-          <Trash2 size={18} />
-        </button>
+        <div className="goal-head-actions">
+          <button className="icon-button" aria-label="목표 수정" onClick={onEdit}>
+            <Pencil size={17} />
+          </button>
+          <button className="icon-button danger" aria-label="목표 삭제" onClick={onRemove}>
+            <Trash2 size={18} />
+          </button>
+        </div>
       </div>
       <div className="quota">
         <span>오늘</span>
@@ -514,13 +560,22 @@ function GoalCard({
   );
 }
 
-function WeekCalendar({ goals }: { goals: Goal[] }) {
+function dayMarker(goals: Goal[], date: string) {
+  const logs = goals.map((goal) => goal.logs[date]).filter(Boolean);
+  const skipped = logs.some((log) => log!.status === 'skipped');
+  const partial = logs.some((log) => log!.status === 'partial');
+  const done = logs.some((log) => log!.status === 'done');
+  const label = skipped ? 'worst' : partial ? 'partial' : done ? 'done' : '';
+  return { label, mark: skipped ? '!' : partial ? '~' : done ? '✓' : date === today() ? '•' : '' };
+}
+
+function WeekCalendar({ goals, onOpenMonth }: { goals: Goal[]; onOpenMonth: () => void }) {
   return (
     <section className="week-card">
-      <div className="week-head">
+      <button className="week-head" onClick={onOpenMonth} aria-label="전체 캘린더 보기">
         <h3>이번 주</h3>
         <CalendarDays size={18} />
-      </div>
+      </button>
       <div className="week-grid">
         {['월', '화', '수', '목', '금', '토', '일'].map((day) => (
           <span key={day} className="weekday">
@@ -528,15 +583,10 @@ function WeekCalendar({ goals }: { goals: Goal[] }) {
           </span>
         ))}
         {weekDays().map((date) => {
-          const logs = goals.map((goal) => goal.logs[date]).filter(Boolean);
-          const skipped = logs.some((log) => log.status === 'skipped');
-          const partial = logs.some((log) => log.status === 'partial');
-          const done = logs.some((log) => log.status === 'done');
-          const label = skipped ? 'worst' : partial ? 'partial' : done ? 'done' : '';
-
+          const { label, mark } = dayMarker(goals, date);
           return (
             <div className={`day ${label}`} key={date}>
-              <span>{skipped ? '!' : partial ? '~' : done ? '✓' : date === today() ? '•' : ''}</span>
+              <span>{mark}</span>
               <small>{date.slice(8)}</small>
             </div>
           );
@@ -546,23 +596,94 @@ function WeekCalendar({ goals }: { goals: Goal[] }) {
   );
 }
 
-function AddSheet({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void }) {
-  const [detailMode, setDetailMode] = useState(false);
-  const [chapters, setChapters] = useState([{ id: crypto.randomUUID(), title: '', amount: '' }]);
+function MonthCalendar({ goals, onClose }: { goals: Goal[]; onClose: () => void }) {
+  const activeGoals = useMemo(() => goals.filter((goal) => dayDiff(goal.deadline) >= -31), [goals]);
+  const now = new Date();
+
+  return (
+    <div className="overlay settings-overlay" role="dialog" aria-modal="true">
+      <section className="settings-page">
+        <header className="settings-head">
+          <button className="back-button settings-back" onClick={onClose} aria-label="닫기">
+            <ChevronLeft size={22} />
+          </button>
+          <h2>{now.getMonth() + 1}월 미루기 캘린더</h2>
+        </header>
+        <div className="week-grid month-grid">
+          {['월', '화', '수', '목', '금', '토', '일'].map((day) => (
+            <span key={day} className="weekday">
+              {day}
+            </span>
+          ))}
+          {monthDays().map((date, index) => {
+            if (!date) return <div key={`empty-${index}`} />;
+            const { label, mark } = dayMarker(activeGoals, date);
+            return (
+              <div className={`day ${label}`} key={date}>
+                <span>{mark}</span>
+                <small>{date.slice(8)}</small>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function GoalSheet({
+  initialGoal,
+  onClose,
+  onSubmit,
+}: {
+  initialGoal?: Goal;
+  onClose: () => void;
+  onSubmit: (payload: { title: string; deadline: string; total: number; unit: Unit; chapters?: Chapter[] }) => void;
+}) {
+  const [detailMode, setDetailMode] = useState(Boolean(initialGoal?.chapters?.length));
+  const [chapters, setChapters] = useState(
+    initialGoal?.chapters?.length
+      ? initialGoal.chapters.map((c) => ({ id: c.id, title: c.title, amount: String(c.amount) }))
+      : [{ id: crypto.randomUUID(), title: '', amount: '' }],
+  );
   const detailedTotal = chapters.reduce((sum, chapter) => sum + Number(chapter.amount || 0), 0);
 
   function updateChapter(id: string, field: 'title' | 'amount', value: string) {
     setChapters((items) => items.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
   }
 
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const title = String(form.get('title') ?? '').trim();
+    const deadline = String(form.get('deadline') ?? '');
+    const total = Number(form.get('total'));
+    const unit = String(form.get('unit')) as Unit;
+    const resolvedChapters: Chapter[] = chapters
+      .map((chapter) => ({ id: chapter.id, title: chapter.title.trim(), amount: Number(chapter.amount) }))
+      .filter((chapter) => chapter.title && chapter.amount > 0);
+    const resolvedTotal = detailMode ? resolvedChapters.reduce((sum, chapter) => sum + chapter.amount, 0) : total;
+
+    if (!title || !deadline || !resolvedTotal || dayDiff(deadline) <= 0) return;
+    if (detailMode && resolvedChapters.length === 0) return;
+
+    onSubmit({
+      title,
+      deadline,
+      total: resolvedTotal,
+      unit,
+      chapters: detailMode ? resolvedChapters : undefined,
+    });
+  }
+
   return (
     <div className="overlay" role="dialog" aria-modal="true">
-      <form className="sheet" onSubmit={onSubmit}>
+      <form className="sheet" onSubmit={handleSubmit}>
         <div className="sheet-bar" />
         <div className="sheet-head">
           <div>
             <p className="section-label">10초 설정</p>
-            <h2>목표 추가</h2>
+            <h2>{initialGoal ? '목표 수정' : '목표 추가'}</h2>
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="닫기">
             <X size={20} />
@@ -570,11 +691,11 @@ function AddSheet({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event
         </div>
         <label>
           미션명
-          <input name="title" placeholder="예: SQLD 자격증" maxLength={18} required />
+          <input name="title" placeholder="예: SQLD 자격증" maxLength={18} defaultValue={initialGoal?.title} required />
         </label>
         <label>
           마감일
-          <input name="deadline" type="date" min={addDays(1)} required />
+          <input name="deadline" type="date" min={addDays(1)} defaultValue={initialGoal?.deadline} required />
         </label>
         <div className="field-row">
           <label>
@@ -587,13 +708,14 @@ function AddSheet({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event
               placeholder="40"
               required={!detailMode}
               disabled={detailMode}
+              defaultValue={initialGoal && !initialGoal.chapters?.length ? initialGoal.total : undefined}
               value={detailMode ? detailedTotal || '' : undefined}
               readOnly={detailMode}
             />
           </label>
           <label>
             단위
-            <select name="unit" defaultValue="페이지">
+            <select name="unit" defaultValue={initialGoal?.unit ?? '페이지'}>
               {units.map((unit) => (
                 <option key={unit}>{unit}</option>
               ))}
@@ -619,7 +741,6 @@ function AddSheet({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event
                 <label>
                   단원 {index + 1}
                   <input
-                    name="chapterTitle"
                     placeholder="예: SQL 기본 문법"
                     value={chapter.title}
                     onChange={(event) => updateChapter(chapter.id, 'title', event.target.value)}
@@ -628,7 +749,6 @@ function AddSheet({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event
                 <label>
                   분량
                   <input
-                    name="chapterAmount"
                     type="number"
                     min="1"
                     inputMode="decimal"
@@ -658,7 +778,7 @@ function AddSheet({ onClose, onSubmit }: { onClose: () => void; onSubmit: (event
         )}
         <button className="button primary wide" type="submit">
           <Plus size={19} />
-          목표 추가하기
+          {initialGoal ? '수정하기' : '목표 추가하기'}
         </button>
       </form>
     </div>
@@ -774,6 +894,38 @@ function DoneScreen({ goal, onClose }: { goal: Goal; onClose: () => void }) {
         <button className="button primary wide" onClick={onClose}>
           확인
         </button>
+      </section>
+    </div>
+  );
+}
+
+function ResultScreen({ goal, onClose }: { goal: Goal; onClose: () => void }) {
+  async function handleShare() {
+    await shareMirullae({
+      title: '미룰래 결과',
+      text: `${goal.title}: 총 ${formatAmount(goal.completed)}/${formatAmount(goal.total)}${goal.unit} 완료, 미루기 ${goal.postponeCount}회`,
+    });
+  }
+
+  return (
+    <div className="overlay celebration" role="dialog" aria-modal="true">
+      <section className="done-card">
+        <img src={characterFor(goal.postponeCount)} alt="" />
+        <h2>{goal.title} 마감!</h2>
+        <p>
+          {formatAmount(goal.completed)} / {formatAmount(goal.total)} {goal.unit} 완료
+          <br />
+          미루기 {goal.postponeCount}회 · 미룬 분량 {formatAmount(goal.postponedTotal)}{goal.unit}
+        </p>
+        <div className="fact-actions">
+          <button className="button quiet" onClick={handleShare}>
+            <Share2 size={18} />
+            공유하기
+          </button>
+          <button className="button primary" onClick={onClose}>
+            확인
+          </button>
+        </div>
       </section>
     </div>
   );
