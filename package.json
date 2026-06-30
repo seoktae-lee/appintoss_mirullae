@@ -1,0 +1,30 @@
+{
+  "name": "appintoss-mirullae",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "granite dev",
+    "build": "ait build",
+    "web:build": "tsc -b && vite build",
+    "deploy": "ait deploy",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@apps-in-toss/web-framework": "^2.10.1",
+    "@emotion/react": "^11.14.0",
+    "@toss/tds-colors": "^0.1.0",
+    "@toss/tds-mobile": "^2.5.0",
+    "@toss/tds-mobile-ait": "^2.5.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7"
+  }
+}
