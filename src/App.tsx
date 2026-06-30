@@ -341,11 +341,7 @@ function MainApp({
         <div className={`scene-bg worst ${totalPostpones > 0 ? 'visible' : ''}`} />
         <div className="app-content">
         <header className="topbar">
-          <img className="brand-mark" src={asset('brand/logo.png')} alt="" />
-          <div>
-            <p className="eyebrow">Mirullae</p>
-            <h1>미룰래</h1>
-          </div>
+          <img className="topbar-wordmark" src={asset('brand/wordmark.png')} alt="미룰래" />
           <div className="top-actions">
             <button className="icon-button" aria-label="설정" onClick={() => setShowSettings(true)}>
               <Settings size={19} />

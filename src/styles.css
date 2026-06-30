@@ -20,6 +20,30 @@ body,
   margin: 0;
 }
 
+html,
+body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.app {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.app::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -94,15 +118,16 @@ button {
 
 .topbar {
   display: grid;
-  grid-template-columns: 44px 1fr auto;
+  grid-template-columns: 1fr auto;
   gap: 10px;
   align-items: center;
 }
 
-.brand-mark {
-  width: 44px;
-  height: 44px;
+.topbar-wordmark {
+  height: 26px;
+  width: auto;
   object-fit: contain;
+  filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.85)) drop-shadow(0 0 6px rgba(255, 255, 255, 0.55));
 }
 
 .eyebrow,
@@ -594,6 +619,13 @@ select {
 input:disabled {
   color: #6b7684;
   background: #edf1f5;
+}
+
+input[type='date'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  display: block;
 }
 
 input:focus,
